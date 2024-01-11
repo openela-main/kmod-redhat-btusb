@@ -1,0 +1,13 @@
+Index: src/drivers/bluetooth/btusb.c
+===================================================================
+--- src.orig/drivers/bluetooth/btusb.c	2019-09-12 15:05:18.368821660 +0200
++++ src/drivers/bluetooth/btusb.c	2019-09-12 15:19:46.015032499 +0200
+@@ -38,7 +38,7 @@
+ #include "btbcm.h"
+ #include "btrtl.h"
+ 
+-#define VERSION "0.8"
++#define VERSION "0.8_4.18.0_80.23_dup8.0"
+ 
+ static bool disable_scofix;
+ static bool force_scofix;

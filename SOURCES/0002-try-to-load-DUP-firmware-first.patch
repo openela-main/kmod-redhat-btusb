@@ -1,0 +1,173 @@
+Index: src/drivers/bluetooth/btusb.c
+===================================================================
+--- src.orig/drivers/bluetooth/btusb.c	2019-09-12 15:42:08.489226484 +0200
++++ src/drivers/bluetooth/btusb.c	2019-09-16 17:49:20.650911909 +0200
+@@ -1584,33 +1584,48 @@
+ 	const struct firmware *fw;
+ 	char fwname[64];
+ 	int ret;
++	u32 ndup;
+ 
+-	snprintf(fwname, sizeof(fwname),
+-		 "intel/ibt-hw-%x.%x.%x-fw-%x.%x.%x.%x.%x.bseq",
+-		 ver->hw_platform, ver->hw_variant, ver->hw_revision,
+-		 ver->fw_variant,  ver->fw_revision, ver->fw_build_num,
+-		 ver->fw_build_ww, ver->fw_build_yy);
+-
+-	ret = request_firmware(&fw, fwname, &hdev->dev);
+-	if (ret < 0) {
+-		if (ret == -EINVAL) {
+-			bt_dev_err(hdev, "Intel firmware file request failed (%d)",
+-				   ret);
+-			return NULL;
+-		}
++	for (ndup = 0; ndup < 2; ndup++) {
++		snprintf(fwname, sizeof(fwname),
++			 "%sintel/ibt-hw-%x.%x.%x-fw-%x.%x.%x.%x.%x.bseq",
++			 ndup ? "" : "btusb_dup8.0/",
++			 ver->hw_platform, ver->hw_variant, ver->hw_revision,
++			 ver->fw_variant,  ver->fw_revision, ver->fw_build_num,
++			 ver->fw_build_ww, ver->fw_build_yy);
++
++		ret = request_firmware(&fw, fwname, &hdev->dev);
++		if (ret < 0) {
++			if (ret == -EINVAL) {
++				bt_dev_err(hdev, "Intel firmware file \"%s\""
++					   "request failed (%d)",
++					   fwname, ret);
++				return NULL;
++			}
+ 
+-		bt_dev_err(hdev, "failed to open Intel firmware file: %s (%d)",
+-			   fwname, ret);
++			bt_dev_err(hdev, "failed to open Intel firmware file: %s (%d)",
++				   fwname, ret);
+ 
+-		/* If the correct firmware patch file is not found, use the
+-		 * default firmware patch file instead
+-		 */
+-		snprintf(fwname, sizeof(fwname), "intel/ibt-hw-%x.%x.bseq",
+-			 ver->hw_platform, ver->hw_variant);
+-		if (request_firmware(&fw, fwname, &hdev->dev) < 0) {
+-			bt_dev_err(hdev, "failed to open default fw file: %s",
+-				   fwname);
+-			return NULL;
++			/* If the correct firmware patch file is not found, use
++			 * the default firmware patch file instead
++			 */
++			snprintf(fwname, sizeof(fwname),
++				 "%sintel/ibt-hw-%x.%x.bseq",
++				 ndup ? "" : "btusb_dup8.0/",
++				 ver->hw_platform, ver->hw_variant);
++
++			ret = request_firmware(&fw, fwname, &hdev->dev);
++			if (ret < 0) {
++				bt_dev_err(hdev, "failed to open default fw file: %s (%d)",
++					   fwname, ret);
++
++				if (ret == -EINVAL)
++					return NULL;
++			} else {
++				break;
++			}
++		} else {
++			break;
+ 		}
+ 	}
+ 
+@@ -2053,12 +2068,13 @@
+ static bool btusb_setup_intel_new_get_fw_name(struct intel_version *ver,
+ 					     struct intel_boot_params *params,
+ 					     char *fw_name, size_t len,
+-					     const char *suffix)
++					     const char *suffix, u32 dup)
+ {
+ 	switch (ver->hw_variant) {
+ 	case 0x0b:	/* SfP */
+ 	case 0x0c:	/* WsP */
+-		snprintf(fw_name, len, "intel/ibt-%u-%u.%s",
++		snprintf(fw_name, len, "%sintel/ibt-%u-%u.%s",
++			dup ? "btusb_dup8.0/" : "",
+ 			le16_to_cpu(ver->hw_variant),
+ 			le16_to_cpu(params->dev_revid),
+ 			suffix);
+@@ -2067,7 +2083,8 @@
+ 	case 0x12:	/* ThP */
+ 	case 0x13:	/* HrP */
+ 	case 0x14:	/* CcP */
+-		snprintf(fw_name, len, "intel/ibt-%u-%u-%u.%s",
++		snprintf(fw_name, len, "%sintel/ibt-%u-%u-%u.%s",
++			dup ? "btusb_dup8.0/" : "",
+ 			le16_to_cpu(ver->hw_variant),
+ 			le16_to_cpu(ver->hw_revision),
+ 			le16_to_cpu(ver->fw_revision),
+@@ -2090,6 +2107,7 @@
+ 	ktime_t calltime, delta, rettime;
+ 	unsigned long long duration;
+ 	int err;
++	u32 ndup;
+ 
+ 	BT_DBG("%s", hdev->name);
+ 
+@@ -2214,34 +2232,49 @@
+ 	 * ibt-<hw_variant>-<hw_revision>-<fw_revision>.sfi.
+ 	 *
+ 	 */
+-	err = btusb_setup_intel_new_get_fw_name(&ver, &params, fwname,
+-						sizeof(fwname), "sfi");
+-	if (!err) {
+-		bt_dev_err(hdev, "Unsupported Intel firmware naming");
+-		return -EINVAL;
++
++	/* First, we try to load a firmware from the DUP location, then fall
++	 * back to the generic location.
++	 */
++	for (ndup = 0; ndup < 2; ndup++) {
++		err = btusb_setup_intel_new_get_fw_name(&ver, &params, fwname,
++							sizeof(fwname), "sfi",
++							!ndup);
++		if (!err) {
++			bt_dev_err(hdev, "Unsupported Intel firmware naming");
++			return -EINVAL;
++		}
++
++		err = request_firmware(&fw, fwname, &hdev->dev);
++		if (err < 0)
++			bt_dev_err(hdev, "Failed to load Intel firmware file "
++				   "\"%s\" (%d)", fwname, err);
++		else
++			break;
+ 	}
+ 
+-	err = request_firmware(&fw, fwname, &hdev->dev);
+-	if (err < 0) {
+-		bt_dev_err(hdev, "Failed to load Intel firmware file (%d)", err);
++	if (err < 0)
+ 		return err;
+-	}
+ 
+ 	bt_dev_info(hdev, "Found device firmware: %s", fwname);
+ 
+ 	/* Save the DDC file name for later use to apply once the firmware
+ 	 * downloading is done.
+ 	 */
++
++	/* We assume that the DDC file should be at the same place as the SFI
++	 * file.
++	 */
+ 	err = btusb_setup_intel_new_get_fw_name(&ver, &params, fwname,
+-						sizeof(fwname), "ddc");
++						sizeof(fwname), "ddc", !ndup);
+ 	if (!err) {
+ 		bt_dev_err(hdev, "Unsupported Intel firmware naming");
+ 		return -EINVAL;
+ 	}
+ 
+ 	if (fw->size < 644) {
+-		bt_dev_err(hdev, "Invalid size of firmware file (%zu)",
+-			   fw->size);
++		bt_dev_err(hdev, "Invalid size of firmware file \"%s\" (%zu)",
++			   fwname, fw->size);
+ 		err = -EBADF;
+ 		goto done;
+ 	}
